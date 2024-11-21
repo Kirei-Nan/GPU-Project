@@ -10,14 +10,12 @@
 #include <cstdlib> // for std::atoi
 #include <chrono>
 
-// Include CUDA headers
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 
 using namespace std;
 using namespace Eigen;
 
-// Define types for row-major matrices and vectors
 typedef Matrix<float, Dynamic, Dynamic, RowMajor> MatrixXfRowMajor;
 typedef Matrix<float, Dynamic, 1> VectorXf;
 
@@ -32,7 +30,6 @@ typedef Matrix<float, Dynamic, 1> VectorXf;
         }                                                                                \
     } while (0)
 
-// Function to read the shape of a parameter from the shape file
 vector<int> read_shape(const string& shape_file_path) {
     ifstream shape_file(shape_file_path);
     if (!shape_file.is_open()) {
@@ -53,7 +50,6 @@ vector<int> read_shape(const string& shape_file_path) {
     return shape;
 }
 
-// Function to load a parameter (weights or biases) from a binary file
 template <typename T>
 void load_parameter(const string& bin_file_path, const vector<int>& shape, vector<T>& data) {
     ifstream bin_file(bin_file_path, ios::binary);
@@ -81,7 +77,6 @@ void load_parameter(const string& bin_file_path, const vector<int>& shape, vecto
     bin_file.close();
 }
 
-// Activation function: ReLU
 void relu(MatrixXfRowMajor& x) {
     x = x.cwiseMax(0.0f);
 }
@@ -119,7 +114,6 @@ __global__ void set_ones(float* x, int n) {
     }
 }
 
-// Custom CUDA kernel for matrix-matrix multiplication
 __global__ void matmul(const float* A, const float* B, float* C, int m, int n, int k) {
     // Each thread computes one element of the output matrix C
     int row = blockIdx.y * blockDim.y + threadIdx.y; // m
@@ -133,8 +127,6 @@ __global__ void matmul(const float* A, const float* B, float* C, int m, int n, i
     }
 }
 
-
-// Custom CUDA kernel for matrix-vector multiplication
 __global__ void matvec(const float* A, const float* x, float* y, int m, int n) {
     // Each thread computes one element of the output vector y
     int row = blockIdx.x * blockDim.x + threadIdx.x;
@@ -147,7 +139,6 @@ __global__ void matvec(const float* A, const float* x, float* y, int m, int n) {
     }
 }
 
-// Kernel to perform mean pooling over tokens (summing and then scaling)
 __global__ void mean_pooling(const float* x, float* pooled_features, int tokens, int features) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < features) {
@@ -159,7 +150,6 @@ __global__ void mean_pooling(const float* x, float* pooled_features, int tokens,
     }
 }
 
-// Kernel to scale a vector by a scalar
 __global__ void scale_vector(float* x, int n, float scalar) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
@@ -168,12 +158,9 @@ __global__ void scale_vector(float* x, int n, float scalar) {
 }
 
 
-// Model class
 class SentimentModel {
 public:
-    // Constructor
     SentimentModel(const string& weights_dir) {
-        // Initialize device pointers to nullptr
         d_fc1_weight = nullptr;
         d_fc1_bias = nullptr;
         d_fc2_weight = nullptr;
@@ -186,9 +173,7 @@ public:
         load_weights(weights_dir);
     }
 
-    // Destructor
     ~SentimentModel() {
-        // Free device memory if allocated
         if (d_fc1_weight) cudaFree(d_fc1_weight);
         if (d_fc1_bias) cudaFree(d_fc1_bias);
         if (d_fc2_weight) cudaFree(d_fc2_weight);
@@ -255,13 +240,11 @@ public:
     VectorXf cuda_forward(const MatrixXfRowMajor& input) {
         // Input shape: (256, 300)
 
-        // Copy input to device
         size_t input_size = input.rows() * input.cols() * sizeof(float);
         float* d_input;
         CUDA_CHECK(cudaMalloc((void**)&d_input, input_size));
         CUDA_CHECK(cudaMemcpy(d_input, input.data(), input_size, cudaMemcpyHostToDevice));
 
-        // Allocate device memory for intermediate activations
         // x1: (256, 150)
         float* d_x1;
         size_t x1_size = 256 * 150 * sizeof(float);
@@ -287,7 +270,6 @@ public:
         size_t output_size = 2 * sizeof(float);
         CUDA_CHECK(cudaMalloc((void**)&d_output, output_size));
 
-        // Dimensions
         int m, n, k;
 
         // Layer 1: x1 = input * fc1_weight^T + fc1_bias
@@ -295,16 +277,13 @@ public:
         k = 300;
         n = 150;
 
-        // Define block and grid sizes
         dim3 blockDim(16, 16);
         dim3 gridDim((n + blockDim.x - 1) / blockDim.x,
                      (m + blockDim.y - 1) / blockDim.y);
 
-        // Matrix multiplication kernel
         matmul<<<gridDim, blockDim>>>(d_input, d_fc1_weight, d_x1, m, n, k);
         CUDA_CHECK(cudaGetLastError());
 
-        // Add bias and ReLU
         int threads_per_block = 256;
         int total_elements = m * n;
         int blocks = (total_elements + threads_per_block - 1) / threads_per_block;
@@ -322,27 +301,22 @@ public:
         matmul<<<gridDim, blockDim>>>(d_x1, d_fc2_weight, d_x2, m, n, k);
         CUDA_CHECK(cudaGetLastError());
 
-        // Add bias and ReLU
         total_elements = m * n;
         blocks = (total_elements + threads_per_block - 1) / threads_per_block;
         add_bias_relu<<<blocks, threads_per_block>>>(d_x2, d_fc2_bias, m, n);
         CUDA_CHECK(cudaGetLastError());
 
         // Mean pooling over tokens (axis=0)
-        // Initialize pooled_features to zero
         CUDA_CHECK(cudaMemset(d_pooled_features, 0.0f, pooled_features_size));
 
-        // Sum over rows
         int features = n;
         int tokens = m;
         blockDim = dim3(256);
         gridDim = dim3((features + blockDim.x - 1) / blockDim.x);
 
-        // Kernel to sum over rows
         mean_pooling<<<gridDim, blockDim>>>(d_x2, d_pooled_features, tokens, features);
         CUDA_CHECK(cudaGetLastError());
 
-        // Divide by number of tokens to get mean
         scale_vector<<<gridDim, blockDim>>>(d_pooled_features, features, 1.0f / tokens);
         CUDA_CHECK(cudaGetLastError());
 
@@ -356,7 +330,6 @@ public:
         matvec<<<gridDim, blockDim>>>(d_fc3_weight, d_pooled_features, d_x3, m, n);
         CUDA_CHECK(cudaGetLastError());
 
-        // Add bias and ReLU
         threads_per_block = 256;
         blocks = (m + threads_per_block - 1) / threads_per_block;
         add_bias_relu_vector<<<blocks, threads_per_block>>>(d_x3, d_fc3_bias, m);
@@ -371,16 +344,13 @@ public:
         matvec<<<gridDim, blockDim>>>(d_fc4_weight, d_x3, d_output, m, n);
         CUDA_CHECK(cudaGetLastError());
 
-        // Add bias
         blocks = (m + threads_per_block - 1) / threads_per_block;
         add_bias<<<blocks, threads_per_block>>>(d_output, d_fc4_bias, m);
         CUDA_CHECK(cudaGetLastError());
 
-        // Copy output to host
         VectorXf output(2);
         CUDA_CHECK(cudaMemcpy(output.data(), d_output, output_size, cudaMemcpyDeviceToHost));
 
-        // Free device memory for activations
         CUDA_CHECK(cudaFree(d_input));
         CUDA_CHECK(cudaFree(d_x1));
         CUDA_CHECK(cudaFree(d_x2));
@@ -419,7 +389,6 @@ public:
     }
 
 private:
-    // Model parameters
     MatrixXfRowMajor fc1_weight; // Shape: (150, 300)
     VectorXf fc1_bias;           // Shape: (150,)
     MatrixXfRowMajor fc2_weight; // Shape: (64, 150)
@@ -429,7 +398,6 @@ private:
     MatrixXfRowMajor fc4_weight; // Shape: (2, 32)
     VectorXf fc4_bias;           // Shape: (2,)
 
-    // Device pointers for model parameters
     float* d_fc1_weight;
     float* d_fc1_bias;
     float* d_fc2_weight;
@@ -439,9 +407,7 @@ private:
     float* d_fc4_weight;
     float* d_fc4_bias;
 
-    // Function to load model weights
     void load_weights(const string& weights_dir) {
-        // Layer names mapping
         struct LayerInfo {
             string weight_file;
             string bias_file;
@@ -460,7 +426,6 @@ private:
                         "classifier_3_weight_shape.txt", "classifier_3_bias_shape.txt"}
         };
 
-        // Load each layer's weights and biases
         for (size_t i = 0; i < layers.size(); ++i) {
             // Load weights
             string weight_bin_path = weights_dir + "/" + layers[i].weight_file;
@@ -496,11 +461,9 @@ private:
     }
 };
 
-// Function to load test data
 void load_test_data(const string& test_data_dir,
                     vector<MatrixXfRowMajor>& inputs,
                     vector<int>& labels) {
-    // Load inputs
     string inputs_path = test_data_dir + "/test_inputs.bin";
     ifstream inputs_file(inputs_path, ios::binary);
     if (!inputs_file.is_open()) {
@@ -518,7 +481,6 @@ void load_test_data(const string& test_data_dir,
     inputs_file.read(reinterpret_cast<char*>(inputs_data.data()), inputs_file_size);
     inputs_file.close();
 
-    // Reshape inputs
     inputs.reserve(num_samples);
     for (size_t i = 0; i < num_samples; ++i) {
         float* sample_data = inputs_data.data() + i * sample_size;
@@ -556,7 +518,6 @@ void load_test_data(const string& test_data_dir,
     cout << "[info] Test data loaded successfully. Total samples: " << num_samples << endl;
 }
 
-// Main function
 int main(int argc, char* argv[]) {
     int num_iterations = 1;
 
@@ -570,22 +531,17 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Paths to weights and test data
     string weights_dir = "weights_bin";       // Ensure this directory contains the binary weight files
     string test_data_dir = "test_data_bin";   // Ensure this directory contains test_inputs.bin and test_labels.bin
 
-    // Load the model
     SentimentModel model(weights_dir);
 
-    // Move model weights to GPU
     model.move2gpu();
 
-    // Load test data
     vector<MatrixXfRowMajor> test_inputs;
     vector<int> test_labels;
     load_test_data(test_data_dir, test_inputs, test_labels);
 
-    // Evaluate the model
     int correct = 0;
     int total = test_labels.size();
 

@@ -13,11 +13,9 @@
 using namespace std;
 using namespace Eigen;
 
-// Define types for row-major matrices and vectors
 typedef Matrix<float, Dynamic, Dynamic, RowMajor> MatrixXfRowMajor;
 typedef Matrix<float, Dynamic, 1> VectorXf;
 
-// Function to read the shape of a parameter from the shape file
 vector<int> read_shape(const string& shape_file_path) {
     ifstream shape_file(shape_file_path);
     if (!shape_file.is_open()) {
@@ -38,7 +36,6 @@ vector<int> read_shape(const string& shape_file_path) {
     return shape;
 }
 
-// Function to load a parameter (weights or biases) from a binary file
 template <typename T>
 void load_parameter(const string& bin_file_path, const vector<int>& shape, vector<T>& data) {
     ifstream bin_file(bin_file_path, ios::binary);
@@ -71,7 +68,6 @@ void relu(MatrixXfRowMajor& x) {
     x = x.cwiseMax(0.0f);
 }
 
-// Model class
 class SentimentModel {
 public:
     // Constructor
@@ -79,7 +75,6 @@ public:
         load_weights(weights_dir);
     }
 
-    // Forward pass
     VectorXf forward(const MatrixXfRowMajor& input) {
         // Input shape: (256, 300)
         // Debug: Print input shape and sample values
@@ -122,9 +117,7 @@ private:
     MatrixXfRowMajor fc4_weight; // Shape: (2, 32)
     VectorXf fc4_bias;           // Shape: (2,)
 
-    // Function to load model weights
     void load_weights(const string& weights_dir) {
-        // Layer names mapping
         struct LayerInfo {
             string weight_file;
             string bias_file;
@@ -143,7 +136,6 @@ private:
                         "classifier_3_weight_shape.txt", "classifier_3_bias_shape.txt"}
         };
 
-        // Load each layer's weights and biases
         for (size_t i = 0; i < layers.size(); ++i) {
             // Load weights
             string weight_bin_path = weights_dir + "/" + layers[i].weight_file;
@@ -188,7 +180,6 @@ private:
     }
 };
 
-// Function to load test data
 void load_test_data(const string& test_data_dir,
                     vector<MatrixXfRowMajor>& inputs,
                     vector<int>& labels) {
@@ -255,7 +246,6 @@ VectorXf softmax(const VectorXf& logits) {
     return exp_logits / sum_exp;
 }
 
-// Main function
 int main(int argc, char* argv[]) {
 
     int num_iterations = 1;
@@ -270,14 +260,11 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Paths to weights and test data
     string weights_dir = "weights_bin";       // Ensure this directory contains the binary weight files
     string test_data_dir = "test_data_bin";   // Ensure this directory contains test_inputs.bin and test_labels.bin
 
-    // Load the model
     SentimentModel model(weights_dir);
 
-    // Load test data
     vector<MatrixXfRowMajor> test_inputs;
     vector<int> test_labels;
     load_test_data(test_data_dir, test_inputs, test_labels);
@@ -291,8 +278,7 @@ int main(int argc, char* argv[]) {
 
     double total_time = 0.;
 
-    // for (size_t i = 0; i < test_inputs.size(); ++i) {
-    for (size_t i = 0; i < 1; ++i) {
+    for (size_t i = 0; i < test_inputs.size(); ++i) {
         
         // mimic multiple times data volume
         for (int iteration = 0; iteration < num_iterations; ++iteration) {
